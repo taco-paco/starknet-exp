@@ -21,6 +21,21 @@ import { expect } from "chai";
 
 const provider = new Provider({ rpc: { nodeUrl: "http://127.0.0.1:5050" } });
 
+const sierra = json.parse(
+  fs
+    .readFileSync(
+      "./contracts/target/dev/starknet_hello_world_Balance.contract_class.json"
+    )
+    .toString("ascii")
+);
+const casm = json.parse(
+  fs
+    .readFileSync(
+      "./contracts/target/dev/starknet_hello_world_Balance.compiled_contract_class.json"
+    )
+    .toString("ascii")
+);
+
 async function mint(address: string, amount: number, lite = true) {
   await axios.post(`${starknet.networkConfig.url}/mint`, {
     amount,
@@ -36,6 +51,7 @@ describe("All contract tests", function () {
 
   let targetClassHash: string;
   let targetContractAddress: string;
+  let targetContract: Contract;
 
   before(async function () {
     let asd = await starknet.devnet.getPredeployedAccounts();
@@ -44,25 +60,10 @@ describe("All contract tests", function () {
   });
 
   it("declare", async function () {
-    const contractSierra = fs
-      .readFileSync(
-        "./contracts/target/dev/starknet_hello_world_Balance.contract_class.json"
-      )
-      .toString("ascii");
-
-    const contractCasm = fs
-      .readFileSync(
-        "./contracts/target/dev/starknet_hello_world_Balance.compiled_contract_class.json"
-      )
-      .toString("ascii");
-
-    // Declare & deploy Test contract in devnet
-    const compiledTestSierra = json.parse(contractSierra);
-    const compiledTestCasm = json.parse(contractCasm);
     const declareResponse = await owner.declare(
       {
-        contract: compiledTestSierra,
-        casm: compiledTestCasm,
+        contract: sierra,
+        casm: casm,
       },
       {
         maxFee: 10 ** 15,
@@ -70,8 +71,9 @@ describe("All contract tests", function () {
     );
 
     targetClassHash = declareResponse.class_hash;
-    console.log(targetClassHash);
     expect(targetClassHash).to.not.be.empty;
+
+    console.log("class_hash:", targetClassHash);
   });
 
   it("deploy", async function () {
@@ -87,48 +89,24 @@ describe("All contract tests", function () {
     await provider.waitForTransaction(deployResponse.transaction_hash);
 
     targetContractAddress = deployResponse.contract_address;
-    console.log("conntract address:", targetContractAddress);
     expect(targetContractAddress).to.not.be.empty;
+
+    console.log("contract_address:", targetContractAddress);
+
+    // Init contract instance
+    targetContract = new Contract(sierra.abi, targetContractAddress, provider);
+    targetContract.connect(owner);
   });
 
-  it.only("get", async function () {
-    // let callResponse = await owner.callContract({
-    //   contractAddress: targetContractAddress,
-    //   entrypoint: "get",
-    //   calldata: [],
-    // });
+  it("increase", async function () {
+    let { transaction_hash } = await targetContract.invoke("increase", [10], {
+      maxFee: 10 ** 15,
+    });
+    await provider.waitForTransaction(transaction_hash);
+  });
 
-    const sierra = json.parse(
-      fs
-        .readFileSync(
-          "./contracts/target/dev/starknet_hello_world_Balance.contract_class.json"
-        )
-        .toString("ascii")
-    );
-
-    const myTestContract = new Contract(
-      sierra.abi,
-      "0x44bed840be645a7db117e324f663f4d4b263b03e3973ce63edb1141f23b0548",
-      provider
-    );
-    myTestContract.connect(owner);
-
-    {
-      const res = await myTestContract.get();
-      console.log(res);
-      console.log("asd");
-    }
-
-    {
-      let res = await myTestContract.invoke("increase", [1], {
-        maxFee: 10 ** 15,
-      });
-      console.log(res);
-      await provider.waitForTransaction(res.transaction_hash);
-      console.log("hehehe");
-    }
-
-    const asd = await myTestContract.get();
-    console.log(asd);
+  it("get", async function () {
+    const res = await targetContract.get();
+    console.log(res);
   });
 });
