@@ -5,292 +5,130 @@
 
 // This file is a property of ShardLabs.
 
+import fs from "fs";
+import axios from "axios";
 import { starknet } from "hardhat";
-import { getSelectorFromName } from "starknet/dist/utils/hash";
-import { Account } from "hardhat/types/runtime";
+import {
+  Account,
+  CallData,
+  Contract,
+  ContractFactory,
+  Provider,
+  RpcProvider,
+  json,
+} from "starknet";
+import { expect } from "chai";
+
+const provider = new Provider({ rpc: { nodeUrl: "http://127.0.0.1:5050" } });
+
+async function mint(address: string, amount: number, lite = true) {
+  await axios.post(`${starknet.networkConfig.url}/mint`, {
+    amount,
+    address,
+    lite,
+  });
+}
 
 describe("All contract tests", function () {
   this.timeout(600_000);
 
-  let account: Account;
+  let owner: Account;
 
-  before(async () => {
-    account = await starknet.deployAccount("OpenZeppelin");
+  let targetClassHash: string;
+  let targetContractAddress: string;
+
+  before(async function () {
+    let asd = await starknet.devnet.getPredeployedAccounts();
+    let accData = asd[0];
+    owner = new Account(provider, accData.address, accData.private_key);
   });
 
-  it.only("Diamond", async () => {
-    const fac = await starknet.getContractFactory("D");
-    const d = await fac.deploy();
+  it("declare", async function () {
+    const contractSierra = fs
+      .readFileSync(
+        "./contracts/target/dev/starknet_hello_world_Balance.contract_class.json"
+      )
+      .toString("ascii");
 
-    console.log(await d.call("getVal"));
-    console.log(await d.call("getBA"), await d.call("getCA"));
+    const contractCasm = fs
+      .readFileSync(
+        "./contracts/target/dev/starknet_hello_world_Balance.compiled_contract_class.json"
+      )
+      .toString("ascii");
 
-    await account.invoke(d, "setBA", {
-      val: 2,
-    });
-
-    console.log(
-      await d.call("getBA"),
-      await d.call("getCA"),
-      await d.call("getA")
+    // Declare & deploy Test contract in devnet
+    const compiledTestSierra = json.parse(contractSierra);
+    const compiledTestCasm = json.parse(contractCasm);
+    const declareResponse = await owner.declare(
+      {
+        contract: compiledTestSierra,
+        casm: compiledTestCasm,
+      },
+      {
+        maxFee: 10 ** 15,
+      }
     );
 
-    await account.invoke(d, "setCA", {
-      val: 3,
-    });
-
-    console.log(
-      await d.call("getBA"),
-      await d.call("getCA"),
-      await d.call("getA")
-    );
+    targetClassHash = declareResponse.class_hash;
+    console.log(targetClassHash);
+    expect(targetClassHash).to.not.be.empty;
   });
 
-  it.skip("Delegate tests", async () => {
-    const delegeeFac = await starknet.getContractFactory("delegee");
-    const delegee_hash = await account.declare(delegeeFac);
+  it("deploy", async function () {
+    let deployResponse = await owner.deployContract(
+      {
+        classHash: targetClassHash,
+        constructorCalldata: [0],
+      },
+      {
+        maxFee: 10 ** 15,
+      }
+    );
+    await provider.waitForTransaction(deployResponse.transaction_hash);
 
-    const delegateFac = await starknet.getContractFactory("delegate");
-    const delegate = await delegateFac.deploy({ class_hash: delegee_hash });
-    await account.invoke(delegate, "delegateCall", {
-      class_hash: delegee_hash,
-      selector: getSelectorFromName("delegee"),
-      calldata: [],
-    });
+    targetContractAddress = deployResponse.contract_address;
+    console.log("conntract address:", targetContractAddress);
+    expect(targetContractAddress).to.not.be.empty;
+  });
 
-    console.log(await delegate.call("getAddress"));
-    console.log(await delegate.call("getSender"));
+  it.only("get", async function () {
+    // let callResponse = await owner.callContract({
+    //   contractAddress: targetContractAddress,
+    //   entrypoint: "get",
+    //   calldata: [],
+    // });
 
-    console.log(delegate.address, account.starknetContract.address);
-
-    console.log(
-      await delegate.call("getData", {
-        selector: getSelectorFromName("getAddress"),
-      })
+    const sierra = json.parse(
+      fs
+        .readFileSync(
+          "./contracts/target/dev/starknet_hello_world_Balance.contract_class.json"
+        )
+        .toString("ascii")
     );
 
-    console.log(
-      await delegate.call("getData", {
-        selector: getSelectorFromName("getSender"),
-      })
+    const myTestContract = new Contract(
+      sierra.abi,
+      "0x44bed840be645a7db117e324f663f4d4b263b03e3973ce63edb1141f23b0548",
+      provider
     );
+    myTestContract.connect(owner);
 
     {
-      await account.invoke(delegate, "setData", {
-        selector: getSelectorFromName("delegee"),
-      });
-
-      console.log(
-        await delegate.call("getData", {
-          selector: getSelectorFromName("getAddress"),
-        })
-      );
-
-      console.log(
-        await delegate.call("getData", {
-          selector: getSelectorFromName("getSender"),
-        })
-      );
+      const res = await myTestContract.get();
+      console.log(res);
+      console.log("asd");
     }
-  });
 
-  it.skip("sys attempt", async () => {
-    const inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    const inheritenceContract = await inheritenceFactory.deploy();
+    {
+      let res = await myTestContract.invoke("increase", [1], {
+        maxFee: 10 ** 15,
+      });
+      console.log(res);
+      await provider.waitForTransaction(res.transaction_hash);
+      console.log("hehehe");
+    }
 
-    const res = await account.invoke(inheritenceContract, "call_sys_raw_input");
-  });
-
-  it.skip("Test raw input", async () => {
-    const inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    const inheritenceContract = await inheritenceFactory.deploy();
-
-    const res = await account.invoke(inheritenceContract, "call_raw_input", {
-      calldata: [1, 1],
-    });
-  });
-
-  it.skip("Test raw input", async () => {
-    const inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    const inheritenceContract = await inheritenceFactory.deploy();
-    //console.log("inheritenceContract addr", inheritenceContract.address);
-
-    const res = await account.call(
-      inheritenceContract,
-      "test_raw_input",
-      {
-        selector: 22,
-        calldata: [1, 1],
-      },
-      { maxFee: 10000 }
-    );
-    console.log("res", res);
-
-    // const res = await inheritenceContract.invoke("test_raw_input", {
-    //   selector: 22,
-    //   calldata: [1, 1],
-    // });
-    // console.log(res);
-  });
-
-  it.skip("Test address return", async () => {
-    let inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    let inheritenceContract = await inheritenceFactory.deploy();
-    //await account.invoke(inheritenceContract, "increaseLol");
-
-    await account.invoke(inheritenceContract, "deposit", {
-      from_address: account.starknetContract.address,
-      value: 1,
-    });
-  });
-
-  it("Test call_contract", async () => {
-    let inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    let inheritenceContract = await inheritenceFactory.deploy();
-    //console.log(await account.call(inheritenceContract, 'getLol'));
-
-    const selector = getSelectorFromName("asd");
-    const target = inheritenceContract.address;
-    const payload = {
-      to: target,
-      function_selector: selector,
-      calldata: [2],
-    };
-
-    console.log(payload);
-
-    const res = await account.invoke(inheritenceContract, "callF", payload);
-    console.log(res);
-    console.log(await account.call(inheritenceContract, "getOriginAndCaller"));
-    //console.log(await account.call(inheritenceContract, 'getLol'));
-  });
-
-  it.skip("Test interface", async () => {
-    let inheritenceFactory = await starknet.getContractFactory(
-      "contracts/FinalInheritence.cairo"
-    );
-    let inheritenceContract = await inheritenceFactory.deploy();
-    await account.invoke(inheritenceContract, "increaseLol");
-    console.log(await account.call(inheritenceContract, "getLol"));
-
-    await account.invoke(inheritenceContract, "callInherited");
-    console.log(await account.call(inheritenceContract, "getLol"));
-  });
-
-  it.skip("Test delegate", async () => {
-    let inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    let inheritenceContract = await inheritenceFactory.deploy();
-
-    let inheritence2Factory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence2.cairo"
-    );
-    let inheritence2Contract = await inheritence2Factory.deploy({
-      anotherContractAddress: inheritenceContract.address,
-    });
-
-    console.log(await account.invoke(inheritence2Contract, "delegateGetLol"));
-  });
-
-  it.skip("Test txInfo", async () => {
-    let inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    let inheritenceContract = await inheritenceFactory.deploy();
-
-    let inheritence2Factory = await starknet.getContractFactory(
-      "contracts/Inheritence2.cairo"
-    );
-    let inheritence2Contract = await inheritence2Factory.deploy({
-      anotherContractAddress: inheritenceContract.address,
-    });
-
-    let { origin: originAddress, caller: callerAddress } = await account.call(
-      inheritence2Contract,
-      "getOriginAndCaller"
-    );
-    console.log(
-      account.starknetContract.address,
-      originAddress.toString(16),
-      callerAddress.toString(16)
-    );
-  });
-
-  it.skip("Test owned", async () => {
-    let mainContractFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    let mainContract = await mainContractFactory.deploy();
-
-    let { origin: originAddress } = await account.call(
-      mainContract,
-      "getTxInfoVal"
-    );
-    console.log(account.starknetContract.address);
-    console.log("originAddress", originAddress.toString(16));
-  });
-
-  it.skip("Test owned", async () => {
-    let mainContractFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    let mainContract = await mainContractFactory.deploy();
-
-    let { lol: address } = await account.call(mainContract, "getLol");
-    console.log("acc add", account.starknetContract.address);
-    console.log("contr", mainContract.address);
-    console.log("address", address.toString(16));
-  });
-
-  it.skip("Test inheritence", async () => {
-    let inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    let inheritenceContract = await inheritenceFactory.deploy();
-
-    // let inheritence2Factory = await starknet.getContractFactory('contracts/Inheritence2.cairo');
-    // let inheritence2Contract = await inheritence2Factory.deploy({ anotherContractAddress: inheritenceContract.address });
-
-    // console.log(await account.call(inheritenceContract, 'getLol'));
-
-    const res = await account.invoke(inheritenceContract, "increaseLol");
-    console.log(await starknet.getTransactionReceipt(res));
-    console.log(await account.call(inheritenceContract, "getLol"));
-
-    // await account.invoke(inheritence2Contract, 'increaseLol');
-    // console.log(await account.call(inheritenceContract, 'getLol'));
-  });
-
-  it.skip("Test delegate", async () => {
-    let inheritenceFactory = await starknet.getContractFactory(
-      "contracts/Inheritence/Inheritence.cairo"
-    );
-    let inheritenceContract = await inheritenceFactory.deploy();
-
-    let inheritence2Factory = await starknet.getContractFactory(
-      "contracts/Inheritence2.cairo"
-    );
-    let inheritence2Contract = await inheritence2Factory.deploy({
-      anotherContractAddress: inheritenceContract.address,
-    });
-
-    console.log(await account.call(inheritenceContract, "getLol"));
-
-    await account.invoke(inheritenceContract, "increaseLol");
-    console.log(await account.call(inheritenceContract, "getLol"));
-
-    await account.invoke(inheritence2Contract, "delegateIncreaseLol");
-    console.log(await account.call(inheritence2Contract, "getLol"));
+    const asd = await myTestContract.get();
+    console.log(asd);
   });
 });

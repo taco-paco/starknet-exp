@@ -1,4 +1,11 @@
+# node
 node_modules/
+
+# hardhat
 starknet-artifacts/
 cache/
+
+# scarb
+contracts/target
+
 .DS_STORE
